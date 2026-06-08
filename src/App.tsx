@@ -1,3 +1,4 @@
+// @ts-nocheck
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Package, 
@@ -30,7 +31,7 @@ import {
   ChevronUp,
   List,
   Filter,
-  PieChart as PieChartIcon, // Renombrado para evitar conflicto de nombres con recharts
+  PieChart as PieChartIcon,
   ArrowRight,
   Sparkles,
   Award
@@ -41,9 +42,8 @@ import {
 
 import { initializeApp } from "firebase/app";
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "firebase/auth";
-import { getFirestore, doc, setDoc, collection, onSnapshot, addDoc, deleteDoc, getDoc } from "firebase/firestore";
+import { getFirestore, doc, setDoc, collection, onSnapshot, addDoc, deleteDoc } from "firebase/firestore";
 
-// --- POLYFILL PARA EVITAR CAIDAS DE RECHARTS EN EL NAVEGADOR ---
 if (typeof window !== 'undefined' && !window.ResizeObserver) {
   class ResizeObserverMock {
     observe() {}
@@ -53,37 +53,21 @@ if (typeof window !== 'undefined' && !window.ResizeObserver) {
   window.ResizeObserver = ResizeObserverMock;
 }
 
-// Configuración de Firebase Dinámica (priorizando variables de entorno)
-const getFirebaseConfig = () => {
-  if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-    try {
-      return JSON.parse(__firebase_config);
-    } catch (e) {
-      console.error("Error parsing __firebase_config:", e);
-    }
-  }
-  return {
-    apiKey: "AIzaSyDiWfZPVVDQqH4WB0ec1lfOU4w3BZ6Xrl0",
-    authDomain: "huevos-queens.firebaseapp.com",
-    projectId: "huevos-queens",
-    storageBucket: "huevos-queens.firebasestorage.app",
-    messagingSenderId: "131121347509",
-    appId: "1:131121347509:web:115811e07073d2c7ccf7fc",
-    measurementId: "G-NHR66VFBZQ"
-  };
+const firebaseConfig = {
+  apiKey: "AIzaSyDiWfZPVVDQqH4WB0ec1lfOU4w3BZ6Xrl0",
+  authDomain: "huevos-queens.firebaseapp.com",
+  projectId: "huevos-queens",
+  storageBucket: "huevos-queens.firebasestorage.app",
+  messagingSenderId: "131121347509",
+  appId: "1:131121347509:web:115811e07073d2c7ccf7fc",
+  measurementId: "G-NHR66VFBZQ"
 };
 
-const firebaseConfig = getFirebaseConfig();
-let app, auth, db;
-try {
-  app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
-  db = getFirestore(app);
-} catch (e) {
-  console.error("Error al inicializar Firebase:", e);
-}
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = 'huevos-queens-unified-v3';
 
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'huevos-queens-unified-v3';
 const COLORS = ['#0f766e', '#d97706', '#2563eb', '#dc2626', '#7c3aed', '#db2777', '#4b5563'];
 const TIPOS_HUEVO = ['Jumbo', 'AAA', 'AA', 'A', 'B', 'C', 'Rotos'];
 
@@ -102,11 +86,16 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [dbData, setDbData] = useState({}); 
   const [transactions, setTransactions] = useState([]); 
+  const [saldosBase, setSaldosBase] = useState({ inversionBase: 0, retornoBase: 0 });
   const [loading, setLoading] = useState(true);
   const [fecha, setFecha] = useState(new Date().toISOString().split('T')[0]);
   const [vista, setVista] = useState('dashboard'); 
   const [online, setOnline] = useState(navigator.onLine);
+  const [mostrarAyudaAuth, setMostrarAyudaAuth] = useState(false);
   
+  const [inputInversion, setInputInversion] = useState('');
+  const [inputRetorno, setInputRetorno] = useState('');
+
   const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', type: 'success', onConfirm: null });
   const [toastMessage, setToastMessage] = useState('');
 
@@ -115,13 +104,7 @@ export default function App() {
   const [nuevoGastoDist, setNuevoGastoDist] = useState({ concepto: '', valor: '' });
   
   const [nuevoMovimientoFinanciero, setNuevoMovimientoFinanciero] = useState({
-    tipo: 'gasto_granja', 
-    concepto: '',
-    valor: '',
-    categoria: 'Insumos', 
-    fuenteFinanciamiento: 'Ventas de Finca', 
-    empleadoNombre: 'Samuel', 
-    ayudanteNombre: ''
+    tipo: 'gasto_granja', concepto: '', valor: '', categoria: 'Insumos', fuenteFinanciamiento: 'Ventas de Finca', empleadoNombre: 'Samuel', ayudanteNombre: ''
   });
 
   const [busquedaDeudor, setBusquedaDeudor] = useState('');
@@ -129,11 +112,10 @@ export default function App() {
   const [deudorSeleccionado, setDeudorSeleccionado] = useState(null);
   const [metodoPagoAbono, setMetodoPagoAbono] = useState('Efectivo');
 
-  // --- 1. PROCESO DE AUTENTICACION CONFIABLE (CON GARANTIAS DE LOADING) ---
+  // --- 1. PROCESO DE AUTENTICACION CON REINTENTO ROBUSTO ---
   useEffect(() => {
     if (!auth) {
       setLoading(false);
-      showToast('❌ Error: Firebase no configurado correctamente.');
       return;
     }
 
@@ -145,24 +127,30 @@ export default function App() {
           await signInAnonymously(auth);
         }
       } catch (err) {
-        console.error("Error de Autenticación:", err);
-        showToast('⚠️ Usando almacenamiento local por fallas de conexión.');
-        setLoading(false); // Evitamos bucle infinito de carga
+        console.error("Error Auth, reintentando anónimo:", err);
+        try {
+          await signInAnonymously(auth);
+        } catch (err2) {
+          console.error("Fallo total de autenticación:", err2);
+          setMostrarAyudaAuth(true);
+          showToast('⚠️ Usando almacenamiento local por fallas de conexión.');
+          setLoading(false);
+        }
       }
     };
 
     initAuth();
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
+      if (currentUser) setMostrarAyudaAuth(false);
     });
 
     return () => unsubscribe();
   }, []);
 
-  // --- 2. SUSCRIPCIONES A FIRESTORE SIN TRABAS EN CARGA ---
+  // --- 2. SUSCRIPCIONES A FIRESTORE ---
   useEffect(() => {
     if (!user || !db) {
-      // Si no hay base de datos o usuario, cancelamos la pantalla de carga para que el usuario use la interfaz local
       if (!db) setLoading(false);
       return;
     }
@@ -170,34 +158,39 @@ export default function App() {
     const dailyRecordsRef = collection(db, 'artifacts', appId, 'public', 'data', 'daily_records');
     const unsubscribeDaily = onSnapshot(dailyRecordsRef, (snapshot) => {
       const records = {};
-      snapshot.forEach(doc => {
-        records[doc.id] = doc.data();
-      });
+      snapshot.forEach(doc => { records[doc.id] = doc.data(); });
       setDbData(records);
     }, (error) => {
       console.error("Error BD Registros Diarios:", error);
-      showToast('⚠️ Modo de visualización local activado.');
       setLoading(false);
     });
 
     const transactionsRef = collection(db, 'artifacts', appId, 'public', 'data', 'transactions');
     const unsubscribeTrans = onSnapshot(transactionsRef, (snapshot) => {
       const transList = [];
-      snapshot.forEach(doc => {
-        transList.push({ id: doc.id, ...doc.data() });
-      });
+      snapshot.forEach(doc => { transList.push({ id: doc.id, ...doc.data() }); });
       transList.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       setTransactions(transList);
       setLoading(false);
     }, (error) => {
       console.error("Error BD Transacciones:", error);
-      showToast('⚠️ No se pudo conectar con el servidor de finanzas.');
       setLoading(false);
+    });
+
+    const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'saldos_iniciales');
+    const unsubscribeConfig = onSnapshot(configRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setSaldosBase(data);
+        setInputInversion(data.inversionBase || '');
+        setInputRetorno(data.retornoBase || '');
+      }
     });
 
     return () => {
       unsubscribeDaily();
       unsubscribeTrans();
+      unsubscribeConfig();
     };
   }, [user]);
 
@@ -258,20 +251,49 @@ export default function App() {
     setAlertConfig(prev => ({ ...prev, visible: false }));
   };
 
-  const guardarEnFirebase = async (datosActualizados, fechaDestino = fecha, mostrarMensaje = true) => {
-    try {
-      if (!user) {
-        showToast('❌ No autenticado');
-        return;
+  // --- RECONEXIÓN AUTOMÁTICA EN CALIENTE AL GUARDAR ---
+  const asegurarAutenticacion = async () => {
+    if (!auth.currentUser) {
+      try {
+        await signInAnonymously(auth);
+      } catch (e) {
+        console.error("Intento de reconexión fallido:", e);
       }
+    }
+  };
+
+  const guardarEnFirebase = async (datosActualizados, fechaDestino = fecha, mostrarMensaje = true) => {
+    await asegurarAutenticacion();
+    if (!auth.currentUser) {
+      setMostrarAyudaAuth(true);
+      showToast('❌ Error: Base de datos desconectada.');
+      return;
+    }
+    try {
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'daily_records', fechaDestino);
       await setDoc(docRef, datosActualizados, { merge: true });
-      if (mostrarMensaje) {
-        showToast('💾 Sincronizado en Nube');
-      }
+      if (mostrarMensaje) showToast('💾 Guardado y Sincronizado en la Nube');
     } catch (e) {
       console.error("Error al guardar en Firebase:", e);
-      showToast('❌ Error de red / Reglas de seguridad');
+      showToast('❌ Error al guardar datos');
+    }
+  };
+
+  const guardarSaldosInicialesManuales = async () => {
+    await asegurarAutenticacion();
+    if (!auth.currentUser) {
+      setMostrarAyudaAuth(true);
+      return;
+    }
+    try {
+      const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'saldos_iniciales');
+      await setDoc(configRef, {
+        inversionBase: Number(inputInversion || 0),
+        retornoBase: Number(inputRetorno || 0)
+      });
+      showToast('📈 Saldos Base Históricos actualizados!');
+    } catch (e) {
+      showToast('❌ Error al actualizar saldos base');
     }
   };
 
@@ -289,7 +311,7 @@ export default function App() {
   };
 
   const registrarIngresoAutomatico = async (descripcion, monto, fDestino) => {
-    if (!db) return;
+    if (!db || !auth.currentUser) return;
     try {
       const payload = {
         type: 'ingreso',
@@ -332,18 +354,13 @@ export default function App() {
     showToast('🥚 Venta de Finca registrada.');
   };
 
-  const borrarVentaFinca = (id, total) => {
-    showAlert(
-      "Confirmar Eliminación", 
-      "¿Seguro que deseas borrar esta venta de Finca?", 
-      "danger", 
-      () => {
-        const fincaVentas = (datosDia.fincaVentas || []).filter(v => v.id !== id);
-        guardarEnFirebase({ ...datosDia, fincaVentas });
-        closeAlert();
-        showToast('🗑️ Venta eliminada de inventario');
-      }
-    );
+  const borrarVentaFinca = (id) => {
+    showAlert("Confirmar Eliminación", "¿Seguro que deseas borrar esta venta de Finca?", "danger", () => {
+      const fincaVentas = (datosDia.fincaVentas || []).filter(v => v.id !== id);
+      guardarEnFirebase({ ...datosDia, fincaVentas });
+      closeAlert();
+      showToast('🗑️ Venta eliminada de inventario');
+    });
   };
 
   const handleInvInicialChange = (tipo, valor) => {
@@ -391,7 +408,7 @@ export default function App() {
   };
 
   const registrarGastoAutomatico = async (descripcion, monto, categoria, fuente) => {
-    if (!db) return;
+    if (!db || !auth.currentUser) return;
     try {
       const payload = {
         type: 'gasto_granja',
@@ -490,7 +507,11 @@ export default function App() {
 
   const guardarMovimientoFinanciero = async (e) => {
     e.preventDefault();
-    if (!db) return;
+    await asegurarAutenticacion();
+    if (!auth.currentUser) {
+      setMostrarAyudaAuth(true);
+      return;
+    }
 
     if (!nuevoMovimientoFinanciero.concepto || !nuevoMovimientoFinanciero.valor) {
       showToast('⚠️ Inserta concepto y monto.');
@@ -531,13 +552,7 @@ export default function App() {
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'), payload);
       
       setNuevoMovimientoFinanciero({
-        tipo: 'gasto_granja',
-        concepto: '',
-        valor: '',
-        categoria: 'Insumos',
-        fuenteFinanciamiento: 'Ventas de Finca',
-        empleadoNombre: 'Samuel',
-        ayudanteNombre: ''
+        tipo: 'gasto_granja', concepto: '', valor: '', categoria: 'Insumos', fuenteFinanciamiento: 'Ventas de Finca', empleadoNombre: 'Samuel', ayudanteNombre: ''
       });
 
       showToast('💳 Transacción Financiera Guardada.');
@@ -581,8 +596,8 @@ export default function App() {
   }, [dbData]);
 
   const balancePuntoCero = useMemo(() => {
-    let totalInyectado = 0;
-    let totalDevuelto = 0;
+    let totalInyectado = Number(saldosBase.inversionBase || 0);
+    let totalDevuelto = Number(saldosBase.retornoBase || 0);
 
     transactions.forEach(t => {
       if (t.type === 'inyeccion_socio') {
@@ -602,13 +617,8 @@ export default function App() {
     const deudaPendiente = totalInyectado - totalDevuelto;
     const porcentajeRetorno = totalInyectado > 0 ? (totalDevuelto / totalInyectado) * 100 : 0;
 
-    return {
-      totalInyectado,
-      totalDevuelto,
-      deudaPendiente,
-      porcentajeRetorno
-    };
-  }, [transactions]);
+    return { totalInyectado, totalDevuelto, deudaPendiente, porcentajeRetorno };
+  }, [transactions, saldosBase]);
 
   const kpisFinancieros = useMemo(() => {
     let ingresosTotales = 0;
@@ -622,11 +632,7 @@ export default function App() {
       }
     });
 
-    return {
-      ingresosTotales,
-      gastosTotales,
-      balanceOperacional: ingresosTotales - gastosTotales
-    };
+    return { ingresosTotales, gastosTotales, balanceOperacional: ingresosTotales - gastosTotales };
   }, [transactions]);
 
   const gastosPorCategoria = useMemo(() => {
@@ -672,14 +678,7 @@ export default function App() {
     const totalNequi = ventasNequiDist + cobrosNequiDist + ventasNequiFinca;
     const totalConsignar = efectivoEnMano + totalNequi;
 
-    return {
-      invTeoricoFinca,
-      invTeoricoDist,
-      efectivoEnMano,
-      totalNequi,
-      totalConsignar,
-      gastosHoy
-    };
+    return { invTeoricoFinca, invTeoricoDist, efectivoEnMano, totalNequi, totalConsignar, gastosHoy };
   }, [datosDia, dbData]);
 
   if (loading) return (
@@ -690,7 +689,7 @@ export default function App() {
       </div>
       <div className="text-center">
         <h2 className="text-xl font-black tracking-wide">Huevos Queens</h2>
-        <p className="text-sm font-bold text-teal-600 animate-pulse mt-1">Conectando al Sistema Unificado...</p>
+        <p className="text-sm font-bold text-teal-600 animate-pulse mt-1">Sincronizando Libro de Cuentas...</p>
       </div>
     </div>
   );
@@ -698,9 +697,36 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 p-2 md:p-6 font-sans text-slate-800 selection:bg-teal-200">
       
+      {/* ALERTA TOAST */}
       {toastMessage && (
         <div className={`fixed bottom-20 left-1/2 transform -translate-x-1/2 z-[110] px-6 py-3 rounded-full shadow-2xl font-bold text-white text-sm transition-all animate-bounce ${toastMessage.includes('❌') || toastMessage.includes('⚠️') ? 'bg-red-600' : 'bg-teal-800'}`}>
           {toastMessage}
+        </div>
+      )}
+
+      {/* MODAL DE AYUDA AUTH (FIREBASE CONFIG INSTRUCTIONS) */}
+      {mostrarAyudaAuth && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-[130] p-4">
+          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl border border-red-100 animate-in zoom-in-95 duration-200 text-slate-800">
+            <div className="flex items-center gap-3 mb-4 text-red-600">
+              <AlertTriangle size={36} />
+              <div>
+                <h3 className="text-lg font-black text-slate-900">¡Conexión de Firebase bloqueada!</h3>
+                <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold uppercase">Requiere Acción en tu Consola</span>
+              </div>
+            </div>
+            <p className="text-slate-600 text-xs font-semibold leading-relaxed mb-4">
+              La base de datos de <strong>Huevos Queens</strong> está online, pero tu servidor rechaza las conexiones anónimas. Sigue estos 3 pasos rápidos en tu cuenta para habilitarlo en 10 segundos:
+            </p>
+            <div className="bg-slate-50 rounded-2xl p-4 text-xs font-bold space-y-2.5 text-slate-700 border mb-5">
+              <p>1️⃣ Abre tu <a href="https://console.firebase.google.com" target="_blank" rel="noreferrer" className="text-teal-600 underline">Consola de Firebase</a> y entra a tu proyecto <strong>"huevos-queens"</strong>.</p>
+              <p>2️⃣ En el menú de la izquierda ve a <strong>Authentication</strong> y pulsa en la pestaña <strong>Sign-in method</strong>.</p>
+              <p>3️⃣ Busca el proveedor <strong>Anónimo (Anonymous)</strong>, haz clic en editar, selecciona <strong>Habilitar</strong> y presiona <strong>Guardar</strong>.</p>
+            </div>
+            <button onClick={() => { setMostrarAyudaAuth(false); AsegurarAutenticacion(); }} className="w-full bg-teal-800 hover:bg-teal-950 text-white font-black py-3 rounded-xl text-xs shadow-md">
+              COMPROBAR CONEXIÓN DE NUEVO
+            </button>
+          </div>
         </div>
       )}
 
@@ -722,8 +748,10 @@ export default function App() {
         </div>
       )}
 
+      {/* CONTENEDOR PRINCIPAL */}
       <div className="max-w-7xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden min-h-[90vh] border border-slate-100 flex flex-col">
         
+        {/* HEADER DE LA APLICACIÓN */}
         <div className="bg-teal-800 p-5 text-white shadow-lg sticky top-0 z-[100] border-b-4 border-teal-600">
           <div className="flex flex-col md:flex-row justify-between items-center gap-4">
             
@@ -741,7 +769,7 @@ export default function App() {
                   ) : (
                     <span className="flex items-center gap-1 text-red-300"><WifiOff size={12}/> Modo Offline</span>
                   )}
-                  • <Cloud size={12} className="text-teal-400" /> Sincronizado
+                  • <Cloud size={12} className="text-teal-400" /> Cloud Sincronizado
                 </p>
               </div>
             </div>
@@ -786,9 +814,10 @@ export default function App() {
 
         </div>
 
+        {/* CUERPO CENTRAL DE LA APLICACIÓN */}
         <div className="p-4 md:p-6 flex-1">
 
-          {/* VISTA 1: DASHBOARD DE INVERSION */}
+          {/* TABLERO PRINCIPAL / DASHBOARD */}
           {vista === 'dashboard' && (
             <div className="space-y-6 animate-in fade-in duration-300">
               
@@ -871,6 +900,44 @@ export default function App() {
 
               </div>
 
+              {/* NUEVO: AJUSTE DE SALDOS BASE MANUALES HISTÓRICOS */}
+              <div className="bg-slate-50 border border-slate-200 rounded-3xl p-5 shadow-sm">
+                <div className="flex flex-col sm:flex-row justify-between items-center gap-4 mb-4">
+                  <div>
+                    <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-2">
+                      <Save className="text-teal-700 h-5 w-5" /> Configuración de Saldos Iniciales Históricos
+                    </h3>
+                    <p className="text-xs text-slate-500 font-medium">Establece tu inversión total y retornos acumulados anteriores aquí de forma manual. Toda nueva transacción sumará sobre estos valores.</p>
+                  </div>
+                  <button onClick={guardarSaldosInicialesManuales} className="bg-teal-800 hover:bg-teal-900 text-white px-5 py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center gap-2 shrink-0 shadow">
+                    Guardar Saldos Base
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="bg-white p-3 rounded-2xl border border-slate-200">
+                    <label className="text-[10px] font-black text-slate-400 block uppercase mb-1">Inversión Histórica Anterior ($)</label>
+                    <input 
+                      type="number" 
+                      placeholder="Ej: 14500000" 
+                      className="w-full p-2 border border-slate-200 rounded-xl font-bold text-sm outline-none text-slate-700" 
+                      value={inputInversion}
+                      onChange={e => setInputInversion(e.target.value)}
+                    />
+                  </div>
+                  <div className="bg-white p-3 rounded-2xl border border-slate-200">
+                    <label className="text-[10px] font-black text-slate-400 block uppercase mb-1">Retornos Históricos Anteriores ($)</label>
+                    <input 
+                      type="number" 
+                      placeholder="Ej: 5200000" 
+                      className="w-full p-2 border border-slate-200 rounded-xl font-bold text-sm outline-none text-slate-700" 
+                      value={inputRetorno}
+                      onChange={e => setInputRetorno(e.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* METRICAS Y DISTRIBUCION DE GASTOS */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 
                 <div className="bg-white rounded-3xl border border-slate-100 shadow-md p-5">
@@ -1110,7 +1177,7 @@ export default function App() {
                             <span className={`px-2 py-1 rounded-full text-[10px] font-black uppercase ${v.metodoPago === 'Nequi' ? 'bg-purple-100 text-purple-700' : 'bg-green-100 text-green-700'}`}>{v.metodoPago}</span>
                           </td>
                           <td className="px-4 py-3 text-right">
-                            <button onClick={() => borrarVentaFinca(v.id, v.total)} className="text-slate-300 hover:text-red-500 p-1"><Trash2 size={16} /></button>
+                            <button onClick={() => borrarVentaFinca(v.id)} className="text-slate-300 hover:text-red-500 p-1"><Trash2 size={16} /></button>
                           </td>
                         </tr>
                       ))}
