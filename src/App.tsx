@@ -42,7 +42,7 @@ import {
 
 import { initializeApp } from "firebase/app";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
-import { getFirestore, doc, setDoc, collection, onSnapshot, addDoc, deleteDoc, getDocs } from "firebase/firestore";
+import { getFirestore, doc, setDoc, collection, onSnapshot, addDoc, deleteDoc } from "firebase/firestore";
 
 if (typeof window !== 'undefined' && !window.ResizeObserver) {
   class ResizeObserverMock {
@@ -90,8 +90,12 @@ export default function App() {
   const [fecha, setFecha] = useState(new Date().toISOString().split('T')[0]);
   const [vista, setVista] = useState('dashboard'); 
   const [online, setOnline] = useState(navigator.onLine);
-  const [migrando, setMigrando] = useState(false);
-  const [statusMigracion, setStatusMigracion] = useState('');
+
+  // Estados para saldos manuales iniciales (Punto Cero)
+  const [baseInyeccion, setBaseInyeccion] = useState<number>(0);
+  const [baseRetorno, setBaseRetorno] = useState<number>(0);
+  const [inputBaseInyeccion, setInputBaseInyeccion] = useState<string>('0');
+  const [inputBaseRetorno, setInputBaseRetorno] = useState<string>('0');
 
   const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', type: 'success', onConfirm: null });
   const [toastMessage, setToastMessage] = useState('');
@@ -141,7 +145,23 @@ export default function App() {
       setLoading(false);
     }, (e) => { console.error(e); setLoading(false); });
 
-    return () => { unsubscribeDaily(); unsubscribeTrans(); };
+    // Cargar saldos base iniciales manuales de configuración
+    const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config');
+    const unsubscribeConfig = onSnapshot(configRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        setBaseInyeccion(Number(data.baseInyeccion || 0));
+        setBaseRetorno(Number(data.baseRetorno || 0));
+        setInputBaseInyeccion(String(data.baseInyeccion || 0));
+        setInputBaseRetorno(String(data.baseRetorno || 0));
+      }
+    }, (e) => console.error(e));
+
+    return () => { 
+      unsubscribeDaily(); 
+      unsubscribeTrans(); 
+      unsubscribeConfig();
+    };
   }, [user]);
 
   useEffect(() => {
@@ -175,77 +195,20 @@ export default function App() {
     }
   };
 
-  const datosDia = dbData[fecha] || DIA_VACIO;
-
-  const ejecutarMigracionManual = async () => {
-    if (!db) return;
-    setMigrando(true);
-    setStatusMigracion('⏳ Conectando y leyendo bases de datos antiguas...');
+  const guardarSaldosInicialesManuales = async () => {
     try {
-      // 1. MIGRAR DISTRIBUIDORA (registros_diarios_v2)
-      const oldDailySnap = await getDocs(collection(db, 'registros_diarios_v2'));
-      let contDias = 0;
-      for (const docObj of oldDailySnap.docs) {
-        const dateId = docObj.id;
-        const oldData = docObj.data();
-        
-        const schemaUnificado = {
-          invInicial: oldData.invInicial || DIA_VACIO.invInicial,
-          ventas: oldData.ventas || [],
-          cobros: oldData.cobros || [],
-          gastos: oldData.gastos || [],
-          invFinalFisico: oldData.invFinalFisico || DIA_VACIO.invFinalFisico,
-          fincaProduccion: oldData.fincaProduccion || DIA_VACIO.fincaProduccion,
-          fincaVentas: oldData.fincaVentas || [],
-          fincaTransfers: oldData.fincaTransfers || DIA_VACIO.fincaTransfers
-        };
-        
-        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'daily_records', dateId), schemaUnificado, { merge: true });
-        contDias++;
-      }
-
-      // 2. MIGRAR GRANJA (expenses) con mapeo exacto de pestañas
-      const oldGranjaSnap = await getDocs(collection(db, 'artifacts', 'huevos-queens-gastos', 'public', 'data', 'expenses'));
-      let contTrans = 0;
-      for (const docObj of oldGranjaSnap.docs) {
-        const oldT = docObj.data();
-        
-        let nuevoTipo = 'gasto_granja';
-        let nuevaFuente = 'Ventas de Finca'; 
-
-        // Mapeo adaptado según tus especificaciones financieras de imagen_115cc8.png
-        if (oldT.type === 'gasto') {
-          // "Gasto por semanas" representa inyecciones del socio (tu bolsillo)
-          nuevoTipo = 'gasto_granja';
-          nuevaFuente = 'Inyección de Socio';
-        } else if (oldT.type === 'ingreso') {
-          // "Ingreso" representa lo cubierto por ventas del negocio
-          nuevoTipo = 'gasto_granja';
-          nuevaFuente = 'Ventas de Finca';
-        }
-
-        const payloadNuevaTransaccion = {
-          type: nuevoTipo,
-          date: oldT.date || fecha,
-          amount: Number(oldT.amount || 0),
-          description: oldT.description || 'Transacción Migrada',
-          category: oldT.category || 'Insumos',
-          fuenteFinanciamiento: nuevaFuente,
-          createdAt: new Date()
-        };
-
-        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'), payloadNuevaTransaccion);
-        contTrans++;
-      }
-
-      setStatusMigracion(`✅ ¡MIGRACIÓN COMPLETADA! Se estructuraron ${contDias} días de Distribuidora y ${contTrans} movimientos de Finca bajo las nuevas fuentes financieras.`);
-      showToast('🎉 Datos históricos cargados con éxito');
+      const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config');
+      await setDoc(configRef, {
+        baseInyeccion: Number(inputBaseInyeccion),
+        baseRetorno: Number(inputBaseRetorno)
+      }, { merge: true });
+      showToast('💾 Saldos Iniciales Guardados');
     } catch (e) {
-      console.error(e);
-      setStatusMigracion('❌ Error durante la lectura. Verifica tu conexión de red.');
+      showToast('❌ Error al guardar saldos iniciales');
     }
-    setMigrando(false);
   };
+
+  const datosDia = dbData[fecha] || DIA_VACIO;
 
   const handleFincaProduccionChange = (tipo: string, valor: string) => {
     const fincaProduccion = { ...datosDia.fincaProduccion || DIA_VACIO.fincaProduccion, [tipo]: Number(valor) };
@@ -286,7 +249,7 @@ export default function App() {
   };
 
   const borrarVentaFinca = (id: number) => {
-    showAlert("¿Borrar venta?", "Se eliminará el registro contable.", "danger", () => {
+    showAlert("¿Borrar venta de finca?", "Se eliminará el registro contable.", "danger", () => {
       guardarEnFirebase({ ...datosDia, fincaVentas: (datosDia.fincaVentas || []).filter(v => v.id !== id) });
       closeAlert();
     });
@@ -317,7 +280,7 @@ export default function App() {
   };
 
   const borrarVentaDist = (id: number) => {
-    showAlert("¿Eliminar?", "Se borrará de los registros de la distribuidora.", "danger", () => {
+    showAlert("¿Eliminar de distribuidora?", "Se borrará de los registros de la distribuidora.", "danger", () => {
       guardarEnFirebase({ ...datosDia, ventas: (datosDia.ventas || []).filter(v => v.id !== id) });
       closeAlert();
     });
@@ -332,7 +295,10 @@ export default function App() {
   };
 
   const borrarGastoDist = (id: number) => {
-    guardarEnFirebase({ ...datosDia, gastos: (datosDia.gastos || []).filter(g => g.id !== id) });
+    showAlert("¿Borrar gasto?", "Se eliminará el gasto operativo.", "danger", () => {
+      guardarEnFirebase({ ...datosDia, gastos: (datosDia.gastos || []).filter(g => g.id !== id) });
+      closeAlert();
+    });
   };
 
   const realizarCobroDeuda = async () => {
@@ -389,12 +355,20 @@ export default function App() {
   };
 
   const borrarMovimientoFinanciero = async (id: string) => {
-    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transactions', id));
+    showAlert("¿Eliminar transacción?", "Se borrará permanentemente de la contabilidad.", "danger", async () => {
+      try {
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transactions', id));
+        closeAlert();
+        showToast('🗑️ Transacción eliminada');
+      } catch (e) {
+        showToast('❌ Error al eliminar');
+      }
+    });
   };
 
   const balancePuntoCero = useMemo(() => {
-    let totalInyectado = 0;
-    let totalDevuelto = 0;
+    let totalInyectado = baseInyeccion; // Se inicia con el saldo base manual
+    let totalDevuelto = baseRetorno;   // Se inicia con el saldo base manual
 
     transactions.forEach(t => {
       if (t.type === 'inyeccion_socio' || t.fuenteFinanciamiento === 'Inyección de Socio') {
@@ -411,7 +385,7 @@ export default function App() {
       deudaPendiente: totalInyectado - totalDevuelto,
       porcentajeRetorno: totalInyectado > 0 ? (totalDevuelto / totalInyectado) * 100 : 0
     };
-  }, [transactions]);
+  }, [transactions, baseInyeccion, baseRetorno]);
 
   const kpisFinancieros = useMemo(() => {
     let ingresosTotales = 0;
@@ -468,6 +442,25 @@ export default function App() {
     return { invTeoricoFinca, invTeoricoDist, efectivoEnMano, totalNequi, totalConsignar: efectivoEnMano + totalNequi, gastosHoy: gHoy };
   }, [datosDia]);
 
+  const listaDeudores = useMemo(() => {
+    let deudores: any[] = [];
+    Object.keys(dbData).forEach(fechaKey => {
+      const dia = dbData[fechaKey];
+      if (dia.ventas) {
+        dia.ventas.forEach((venta: any) => {
+          if ((venta.abonado || 0) < (venta.total || 0)) {
+            deudores.push({ 
+              ...venta, 
+              fechaOriginal: fechaKey, 
+              saldoPendiente: Number(venta.total || 0) - Number(venta.abonado || 0) 
+            });
+          }
+        });
+      }
+    });
+    return deudores.sort((a, b) => new Date(b.fechaOriginal).getTime() - new Date(a.fechaOriginal).getTime());
+  }, [dbData]);
+
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center bg-teal-900 text-white flex-col gap-4">
       <Loader2 className="animate-spin h-12 w-12 text-yellow-400" />
@@ -477,6 +470,33 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 p-2 md:p-6 font-sans text-slate-800">
+      
+      {/* TOAST NOTIFICACIÓN */}
+      {toastMessage && (
+        <div className="fixed bottom-20 left-1/2 transform -translate-x-1/2 z-[110] px-6 py-3 rounded-full shadow-2xl font-bold text-white text-sm bg-teal-900 border border-teal-700 animate-bounce">
+          {toastMessage}
+        </div>
+      )}
+
+      {/* MODAL DE ALERTA PERSONALIZADA */}
+      {alertConfig.visible && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[120] p-4">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl border border-slate-100">
+            <div className="flex items-center gap-3 mb-4 text-amber-500">
+              <AlertTriangle size={32} className={alertConfig.type === 'danger' ? 'text-red-500' : 'text-amber-500'} />
+              <h3 className="text-lg font-black text-slate-900">{alertConfig.title}</h3>
+            </div>
+            <p className="text-slate-600 text-sm leading-relaxed mb-6">{alertConfig.message}</p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={closeAlert} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs">Cancelar</button>
+              {alertConfig.onConfirm && (
+                <button onClick={alertConfig.onConfirm} className={`px-4 py-2 text-white font-bold rounded-xl text-xs shadow-md ${alertConfig.type === 'danger' ? 'bg-red-600 hover:bg-red-700' : 'bg-teal-600 hover:bg-teal-700'}`}>Confirmar</button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="max-w-7xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden min-h-[90vh] border border-slate-100 flex flex-col">
         
         {/* HEADER PRINCIPAL */}
@@ -520,7 +540,7 @@ export default function App() {
                   <div>
                     <span className="text-[10px] font-black uppercase bg-teal-700/60 text-teal-100 px-3 py-1 rounded-full tracking-widest">CUENTA DE INVERSIÓN CAPITAL DE SOCIO</span>
                     <h2 className="text-3xl font-black mt-3">Balance de Inyección Total</h2>
-                    <p className="text-xs text-teal-200 mt-1">Suma acumulada inyectada de tu bolsillo (Gasto de semanas anterior).</p>
+                    <p className="text-xs text-teal-200 mt-1">Suma acumulada inyectada de tu bolsillo + el saldo histórico manual.</p>
                     <div className="grid grid-cols-2 gap-4 mt-6">
                       <div className="bg-white/10 p-3 rounded-2xl border border-white/5">
                         <span className="text-[10px] text-teal-200 block uppercase font-bold">Inyectado de tu bolsillo</span>
@@ -543,18 +563,38 @@ export default function App() {
                 </div>
               </div>
 
-              {/* MIGRACIÓN VISUAL DE DATOS */}
-              <div className="bg-teal-50 border-2 border-dashed border-teal-300 rounded-3xl p-5 shadow-sm">
-                <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
+              {/* PANEL DE AJUSTE MANUAL INICIAL DE CONTABILIDAD */}
+              <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm">
+                <h3 className="font-black text-slate-900 text-sm mb-2 uppercase tracking-wider flex items-center gap-1.5"><Wallet className="text-teal-700" size={18} /> Ajuste de Saldos Iniciales Históricos (Manual)</h3>
+                <p className="text-xs text-slate-500 font-medium mb-4">Ingresa a continuación la base de dinero que ya has invertido históricamente para no perder tus cálculos del pasado. Los nuevos movimientos que registres se sumarán solos sobre estas bases.</p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end bg-slate-50 p-4 rounded-2xl border">
                   <div>
-                    <h3 className="font-black text-teal-950 text-base">¿Deseas migrar tus datos antiguos de Huevos Queens?</h3>
-                    <p className="text-xs text-teal-700 font-medium mt-0.5">Copia y reestructura automáticamente tus registros de Distribuidora y tus gastos e inyecciones de Finca mapeando tus nuevas especificaciones contables.</p>
+                    <label className="text-[10px] font-black text-slate-500 uppercase block mb-1">Inyección de Bolsillo Histórica ($)</label>
+                    <input 
+                      type="number" 
+                      placeholder="0"
+                      className="w-full p-2.5 border rounded-xl font-extrabold text-sm" 
+                      value={inputBaseInyeccion}
+                      onChange={(e) => setInputBaseInyeccion(e.target.value)}
+                    />
                   </div>
-                  <button onClick={ejecutarMigracionManual} disabled={migrando} className="bg-teal-800 hover:bg-teal-950 text-white px-5 py-3 rounded-2xl font-black text-xs shadow-md uppercase tracking-wider flex items-center gap-2 disabled:bg-slate-400 shrink-0">
-                    {migrando ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />} Iniciar Migración de Datos
+                  <div>
+                    <label className="text-[10px] font-black text-slate-500 uppercase block mb-1">Retorno de Capital Histórico ($)</label>
+                    <input 
+                      type="number" 
+                      placeholder="0"
+                      className="w-full p-2.5 border rounded-xl font-extrabold text-sm text-emerald-800" 
+                      value={inputBaseRetorno}
+                      onChange={(e) => setInputBaseRetorno(e.target.value)}
+                    />
+                  </div>
+                  <button 
+                    onClick={guardarSaldosInicialesManuales} 
+                    className="w-full bg-teal-800 hover:bg-teal-900 text-white px-5 py-2.5 rounded-xl font-extrabold text-xs uppercase tracking-wider shadow"
+                  >
+                    Guardar Saldos Iniciales
                   </button>
                 </div>
-                {statusMigracion && <div className="mt-3 p-3 bg-white border rounded-xl text-xs font-bold text-slate-700 shadow-inner flex items-center gap-2">🚀 {statusMigracion}</div>}
               </div>
             </div>
           )}
@@ -703,6 +743,7 @@ export default function App() {
                       <th className="px-4 py-3">Tipo / Categoría</th>
                       <th className="px-4 py-3">Origen Financiero</th>
                       <th className="px-4 py-3 text-right">Valor</th>
+                      <th className="px-4 py-3"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y font-semibold text-slate-700">
@@ -713,6 +754,9 @@ export default function App() {
                         <td className="px-4 py-3"><span className="bg-slate-100 text-[10px] px-2 py-0.5 rounded-md font-black uppercase">{t.category || t.type}</span></td>
                         <td className="px-4 py-3"><span className="text-[10px] text-slate-500">{t.fuenteFinanciamiento || 'Socio'}</span></td>
                         <td className={`px-4 py-3 text-right font-black ${t.type === 'ingreso' ? 'text-teal-600' : 'text-red-500'}`}>{t.type === 'ingreso' ? '+' : '-'}${Number(t.amount || 0).toLocaleString()}</td>
+                        <td className="px-4 py-3 text-center">
+                          <button onClick={() => borrarMovimientoFinanciero(t.id)} className="text-slate-300 hover:text-red-500 transition-colors p-1"><Trash2 size={16} /></button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
