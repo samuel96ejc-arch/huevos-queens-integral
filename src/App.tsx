@@ -66,7 +66,8 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = 'huevos-queens-unified-v3';
+// CAMBIADO A V4-CLEAN PARA EMPEZAR 100% DESDE CERO
+const appId = 'huevos-queens-v4-clean';
 
 const COLORS = ['#0f766e', '#d97706', '#2563eb', '#dc2626', '#7c3aed', '#db2777', '#4b5563'];
 const TIPOS_HUEVO = ['Jumbo', 'AAA', 'AA', 'A', 'B', 'C', 'Rotos'];
@@ -251,7 +252,7 @@ export default function App() {
     setAlertConfig(prev => ({ ...prev, visible: false }));
   };
 
-  // --- RECONEXIÓN AUTOMÁTICA EN CALIENTE AL GUARDAR ---
+  // --- RECONEXIÓN AUTOMÁTICA EN CALIENTE ---
   const asegurarAutenticacion = async () => {
     if (!auth.currentUser) {
       try {
@@ -272,7 +273,7 @@ export default function App() {
     try {
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'daily_records', fechaDestino);
       await setDoc(docRef, datosActualizados, { merge: true });
-      if (mostrarMensaje) showToast('💾 Guardado y Sincronizado en la Nube');
+      if (mostrarMensaje) showToast('💾 Guardado en la Nube');
     } catch (e) {
       console.error("Error al guardar en Firebase:", e);
       showToast('❌ Error al guardar datos');
@@ -552,7 +553,7 @@ export default function App() {
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'), payload);
       
       setNuevoMovimientoFinanciero({
-        tipo: 'gasto_granja', concepto: '', valor: '', categoria: 'Insumos', fuenteFinanciamiento: 'Ventas de Finca', empleadoNombre: 'Samuel', ayudanteNombre: ''
+        type: 'gasto_granja', concepto: '', valor: '', category: 'Insumos', fuenteFinanciamiento: 'Ventas de Finca', empleadoNombre: 'Samuel', ayudanteNombre: ''
       });
 
       showToast('💳 Transacción Financiera Guardada.');
@@ -723,7 +724,7 @@ export default function App() {
               <p>2️⃣ En el menú de la izquierda ve a <strong>Authentication</strong> y pulsa en la pestaña <strong>Sign-in method</strong>.</p>
               <p>3️⃣ Busca el proveedor <strong>Anónimo (Anonymous)</strong>, haz clic en editar, selecciona <strong>Habilitar</strong> y presiona <strong>Guardar</strong>.</p>
             </div>
-            <button onClick={() => { setMostrarAyudaAuth(false); AsegurarAutenticacion(); }} className="w-full bg-teal-800 hover:bg-teal-950 text-white font-black py-3 rounded-xl text-xs shadow-md">
+            <button onClick={() => { setMostrarAyudaAuth(false); asegurarAutenticacion(); }} className="w-full bg-teal-800 hover:bg-teal-950 text-white font-black py-3 rounded-xl text-xs shadow-md">
               COMPROBAR CONEXIÓN DE NUEVO
             </button>
           </div>
@@ -814,10 +815,9 @@ export default function App() {
 
         </div>
 
-        {/* CUERPO CENTRAL DE LA APLICACIÓN */}
         <div className="p-4 md:p-6 flex-1">
 
-          {/* TABLERO PRINCIPAL / DASHBOARD */}
+          {/* VISTA 1: DASHBOARD DE INVERSION */}
           {vista === 'dashboard' && (
             <div className="space-y-6 animate-in fade-in duration-300">
               
@@ -900,7 +900,7 @@ export default function App() {
 
               </div>
 
-              {/* NUEVO: AJUSTE DE SALDOS BASE MANUALES HISTÓRICOS */}
+              {/* CONFIGURACIÓN DE SALDOS BASE MANUALES HISTÓRICOS */}
               <div className="bg-slate-50 border border-slate-200 rounded-3xl p-5 shadow-sm">
                 <div className="flex flex-col sm:flex-row justify-between items-center gap-4 mb-4">
                   <div>
