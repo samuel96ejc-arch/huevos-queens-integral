@@ -34,7 +34,10 @@ import {
   PieChart as PieChartIcon,
   ArrowRight,
   Sparkles,
-  Award
+  Award,
+  BarChart2,
+  CheckSquare,
+  Heart
 } from 'lucide-react';
 import { 
   PieChart as RePieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend
@@ -66,11 +69,14 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-// CAMBIADO A V4-CLEAN PARA EMPEZAR 100% DESDE CERO
 const appId = 'huevos-queens-v4-clean';
 
 const COLORS = ['#0f766e', '#d97706', '#2563eb', '#dc2626', '#7c3aed', '#db2777', '#4b5563'];
 const TIPOS_HUEVO = ['Jumbo', 'AAA', 'AA', 'A', 'B', 'C', 'Rotos'];
+
+// VALORES BASE HISTÓRICOS FIJADOS
+const INVERSION_BASE = 236000000;
+const RETORNO_BASE = 82700000;
 
 const DIA_VACIO = {
   fincaProduccion: { 'Jumbo': 0, 'AAA': 0, 'AA': 0, 'A': 0, 'B': 0, 'C': 0, 'Rotos': 0 },
@@ -87,16 +93,12 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [dbData, setDbData] = useState({}); 
   const [transactions, setTransactions] = useState([]); 
-  const [saldosBase, setSaldosBase] = useState({ inversionBase: 0, retornoBase: 0 });
   const [loading, setLoading] = useState(true);
   const [fecha, setFecha] = useState(new Date().toISOString().split('T')[0]);
   const [vista, setVista] = useState('dashboard'); 
   const [online, setOnline] = useState(navigator.onLine);
   const [mostrarAyudaAuth, setMostrarAyudaAuth] = useState(false);
   
-  const [inputInversion, setInputInversion] = useState('');
-  const [inputRetorno, setInputRetorno] = useState('');
-
   const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', type: 'success', onConfirm: null });
   const [toastMessage, setToastMessage] = useState('');
 
@@ -105,7 +107,7 @@ export default function App() {
   const [nuevoGastoDist, setNuevoGastoDist] = useState({ concepto: '', valor: '' });
   
   const [nuevoMovimientoFinanciero, setNuevoMovimientoFinanciero] = useState({
-    tipo: 'gasto_granja', concepto: '', valor: '', categoria: 'Insumos', fuenteFinanciamiento: 'Ventas de Finca', empleadoNombre: 'Samuel', ayudanteNombre: ''
+    tipo: 'Gasto de la Granja', concepto: '', valor: '', categoria: 'Insumos', fuenteFinanciamiento: 'Ventas Propias (Suma a Retorno)', empleadoNombre: 'Samuel', ayudanteNombre: ''
   });
 
   const [busquedaDeudor, setBusquedaDeudor] = useState('');
@@ -113,7 +115,6 @@ export default function App() {
   const [deudorSeleccionado, setDeudorSeleccionado] = useState(null);
   const [metodoPagoAbono, setMetodoPagoAbono] = useState('Efectivo');
 
-  // --- 1. PROCESO DE AUTENTICACION CON REINTENTO ROBUSTO ---
   useEffect(() => {
     if (!auth) {
       setLoading(false);
@@ -149,7 +150,6 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // --- 2. SUSCRIPCIONES A FIRESTORE ---
   useEffect(() => {
     if (!user || !db) {
       if (!db) setLoading(false);
@@ -178,24 +178,12 @@ export default function App() {
       setLoading(false);
     });
 
-    const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'saldos_iniciales');
-    const unsubscribeConfig = onSnapshot(configRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setSaldosBase(data);
-        setInputInversion(data.inversionBase || '');
-        setInputRetorno(data.retornoBase || '');
-      }
-    });
-
     return () => {
       unsubscribeDaily();
       unsubscribeTrans();
-      unsubscribeConfig();
     };
   }, [user]);
 
-  // Monitor de conexión de internet
   useEffect(() => {
     const handleStatus = () => setOnline(navigator.onLine);
     window.addEventListener('online', handleStatus);
@@ -206,7 +194,6 @@ export default function App() {
     };
   }, []);
 
-  // --- 3. ARRASTRE DE INVENTARIO INICIAL AUTOMÁTICO ---
   useEffect(() => {
     if (loading) return;
     const datosHoy = dbData[fecha];
@@ -248,11 +235,8 @@ export default function App() {
     setAlertConfig({ visible: true, title, message, type, onConfirm });
   };
 
-  const closeAlert = () => {
-    setAlertConfig(prev => ({ ...prev, visible: false }));
-  };
+  const closeAlert = () => setAlertConfig(prev => ({ ...prev, visible: false }));
 
-  // --- RECONEXIÓN AUTOMÁTICA EN CALIENTE ---
   const asegurarAutenticacion = async () => {
     if (!auth.currentUser) {
       try {
@@ -280,25 +264,10 @@ export default function App() {
     }
   };
 
-  const guardarSaldosInicialesManuales = async () => {
-    await asegurarAutenticacion();
-    if (!auth.currentUser) {
-      setMostrarAyudaAuth(true);
-      return;
-    }
-    try {
-      const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'saldos_iniciales');
-      await setDoc(configRef, {
-        inversionBase: Number(inputInversion || 0),
-        retornoBase: Number(inputRetorno || 0)
-      });
-      showToast('📈 Saldos Base Históricos actualizados!');
-    } catch (e) {
-      showToast('❌ Error al actualizar saldos base');
-    }
-  };
-
   const datosDia = dbData[fecha] || DIA_VACIO;
+
+  const totalProduccionHoy = TIPOS_HUEVO.reduce((acc, tipo) => acc + Number(datosDia.fincaProduccion?.[tipo] || 0), 0);
+  const totalStockInicial = TIPOS_HUEVO.reduce((acc, tipo) => acc + Number(datosDia.invInicial?.[tipo] || 0), 0);
 
   const handleFincaProduccionChange = (tipo, valor) => {
     const fincaProduccion = { ...datosDia.fincaProduccion || DIA_VACIO.fincaProduccion, [tipo]: Number(valor) };
@@ -309,22 +278,6 @@ export default function App() {
     const canTrans = Number(valor);
     const fincaTransfers = { ...datosDia.fincaTransfers || DIA_VACIO.fincaTransfers, [tipo]: canTrans };
     guardarEnFirebase({ ...datosDia, fincaTransfers });
-  };
-
-  const registrarIngresoAutomatico = async (descripcion, monto, fDestino) => {
-    if (!db || !auth.currentUser) return;
-    try {
-      const payload = {
-        type: 'ingreso',
-        date: fDestino,
-        amount: Number(monto),
-        description: descripcion,
-        createdAt: new Date()
-      };
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'), payload);
-    } catch (err) {
-      console.error("Error automático de ingreso:", err);
-    }
   };
 
   const agregarVentaFinca = () => {
@@ -339,17 +292,13 @@ export default function App() {
       ...nuevaVentaFinca,
       cantidad: Number(nuevaVentaFinca.cantidad),
       precioUnitario: Number(nuevaVentaFinca.precioUnitario),
-      total: totalVenta
+      total: totalVenta,
+      liquidado: false, // Control de acumulado Finca
+      diezmoLiquidado: false // Control de acumulado Socio Dios
     };
 
     const fincaVentas = [...datosDia.fincaVentas || [], venta];
     guardarEnFirebase({ ...datosDia, fincaVentas });
-    
-    registrarIngresoAutomatico(
-      `Venta en Finca - ${venta.cliente} (${venta.cantidad} de ${venta.tipo})`, 
-      totalVenta, 
-      fecha
-    );
 
     setNuevaVentaFinca({ cliente: '', cantidad: '', tipo: 'A', precioUnitario: '', metodoPago: 'Efectivo' });
     showToast('🥚 Venta de Finca registrada.');
@@ -361,6 +310,106 @@ export default function App() {
       guardarEnFirebase({ ...datosDia, fincaVentas });
       closeAlert();
       showToast('🗑️ Venta eliminada de inventario');
+    });
+  };
+
+  // ACUMULADO FINCA DÍA TRAS DÍA
+  const acumuladoFincaPendiente = useMemo(() => {
+    let totalCartones = 0;
+    let totalDinero = 0;
+    let ventasPendientes = [];
+
+    Object.keys(dbData).forEach(date => {
+      const ventas = dbData[date].fincaVentas || [];
+      ventas.forEach(v => {
+        if (!v.liquidado) {
+          totalCartones += Number(v.cantidad || 0);
+          totalDinero += Number(v.total || 0);
+          ventasPendientes.push({ date, ...v });
+        }
+      });
+    });
+    return { totalCartones, totalDinero, ventasPendientes };
+  }, [dbData]);
+
+  const liquidarVentasFinca = async () => {
+    if (acumuladoFincaPendiente.ventasPendientes.length === 0) return;
+    
+    showAlert("Liquidar Acumulado", `¿Marcar ventas (${acumuladoFincaPendiente.totalCartones} cartones por $${acumuladoFincaPendiente.totalDinero.toLocaleString()}) como PAGADAS y reiniciar a cero?`, "success", async () => {
+      const updatesByDate = {};
+      acumuladoFincaPendiente.ventasPendientes.forEach(v => {
+        if (!updatesByDate[v.date]) updatesByDate[v.date] = [...dbData[v.date].fincaVentas];
+        const idx = updatesByDate[v.date].findIndex(x => x.id === v.id);
+        if (idx !== -1) updatesByDate[v.date][idx].liquidado = true;
+      });
+
+      const promises = Object.keys(updatesByDate).map(date => {
+        return guardarEnFirebase({ ...dbData[date], fincaVentas: updatesByDate[date] }, date, false);
+      });
+      
+      await Promise.all(promises);
+      closeAlert();
+      showToast('✅ Acumulado de Finca liquidado a cero.');
+    });
+  };
+
+  // ACUMULADO SOCIO DIOS (10%)
+  const acumuladoDiezmo = useMemo(() => {
+    let totalVentas = 0;
+    let ventasPendientesFinca = [];
+    let ventasPendientesDist = [];
+
+    Object.keys(dbData).forEach(date => {
+      const dia = dbData[date];
+      (dia.fincaVentas || []).forEach(v => {
+        if (v.diezmoLiquidado !== true) {
+          totalVentas += Number(v.total || 0);
+          ventasPendientesFinca.push({ date, id: v.id });
+        }
+      });
+      (dia.ventas || []).forEach(v => {
+        if (v.diezmoLiquidado !== true) {
+          totalVentas += Number(v.total || 0);
+          ventasPendientesDist.push({ date, id: v.id });
+        }
+      });
+    });
+
+    return {
+      totalVentas,
+      diezmoTotal: totalVentas * 0.10,
+      ventasPendientesFinca,
+      ventasPendientesDist
+    };
+  }, [dbData]);
+
+  const liquidarDiezmo = async () => {
+    if (acumuladoDiezmo.totalVentas === 0) return;
+    
+    showAlert("Liquidar Aporte a Socio Dios", `¿Registrar diezmo del 10% ($${acumuladoDiezmo.diezmoTotal.toLocaleString()}) y reiniciar el acumulado de ventas a cero?`, "success", async () => {
+      const updatesByDate = {};
+      
+      acumuladoDiezmo.ventasPendientesFinca.forEach(v => {
+        if (!updatesByDate[v.date]) updatesByDate[v.date] = { ...dbData[v.date] };
+        if (!updatesByDate[v.date].fincaVentas) updatesByDate[v.date].fincaVentas = [...(dbData[v.date].fincaVentas || [])];
+        const idx = updatesByDate[v.date].fincaVentas.findIndex(x => x.id === v.id);
+        if (idx !== -1) updatesByDate[v.date].fincaVentas[idx].diezmoLiquidado = true;
+      });
+
+      acumuladoDiezmo.ventasPendientesDist.forEach(v => {
+        if (!updatesByDate[v.date]) updatesByDate[v.date] = { ...dbData[v.date] };
+        if (!updatesByDate[v.date].ventas) updatesByDate[v.date].ventas = [...(dbData[v.date].ventas || [])];
+        const idx = updatesByDate[v.date].ventas.findIndex(x => x.id === v.id);
+        if (idx !== -1) updatesByDate[v.date].ventas[idx].diezmoLiquidado = true;
+      });
+
+      const promises = Object.keys(updatesByDate).map(date => {
+        return guardarEnFirebase(updatesByDate[date], date, false);
+      });
+      
+      await Promise.all(promises);
+      closeAlert();
+      showToast('🕊️ Aporte a Socio Principal liquidado y reiniciado a cero.');
     });
   };
 
@@ -384,17 +433,10 @@ export default function App() {
       cantidad: Number(nuevaVentaDist.cantidad), 
       precioUnitario: Number(nuevaVentaDist.precioUnitario),
       total: Number(nuevaVentaDist.cantidad) * Number(nuevaVentaDist.precioUnitario),
-      abonado: nuevaVentaDist.pagadoAElla ? (Number(nuevaVentaDist.cantidad) * Number(nuevaVentaDist.precioUnitario)) : 0
+      abonado: nuevaVentaDist.pagadoAElla ? (Number(nuevaVentaDist.cantidad) * Number(nuevaVentaDist.precioUnitario)) : 0,
+      diezmoLiquidado: false // Control de acumulado Socio Dios
     };
     guardarEnFirebase({ ...datosDia, ventas: [...datosDia.ventas || [], venta] });
-
-    if (venta.pagadoAElla) {
-      registrarIngresoAutomatico(
-        `Venta Dist. - ${venta.cliente} (${venta.cantidad} de ${venta.tipo})`,
-        venta.total,
-        fecha
-      );
-    }
 
     setNuevaVentaDist({ ...nuevaVentaDist, cliente: '', cantidad: '', precioUnitario: '' });
     showToast('📦 Venta de distribuidora añadida.');
@@ -408,24 +450,6 @@ export default function App() {
     });
   };
 
-  const registrarGastoAutomatico = async (descripcion, monto, categoria, fuente) => {
-    if (!db || !auth.currentUser) return;
-    try {
-      const payload = {
-        type: 'gasto_granja',
-        date: fecha,
-        amount: Number(monto),
-        description: descripcion,
-        category: categoria,
-        fuenteFinanciamiento: fuente,
-        createdAt: new Date()
-      };
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'), payload);
-    } catch (err) {
-      console.error("Error automático de gasto:", err);
-    }
-  };
-
   const agregarGastoDist = () => {
     if (!nuevoGastoDist.concepto || !nuevoGastoDist.valor) return;
     const gasto = { 
@@ -435,14 +459,6 @@ export default function App() {
     };
     
     guardarEnFirebase({ ...datosDia, gastos: [...datosDia.gastos || [], gasto] });
-    
-    registrarGastoAutomatico(
-      `Gasto Distribuidora - ${gasto.concepto}`,
-      gasto.valor,
-      'Otros',
-      'Ventas de Finca' 
-    );
-
     setNuevoGastoDist({ concepto: '', valor: '' });
     showToast('💸 Gasto operativo de distribuidora guardado.');
   };
@@ -475,8 +491,6 @@ export default function App() {
       guardarEnFirebase({ ...diaOriginal, ventas: ventasActualizadas }, fechaOriginal)
     ]);
     
-    registrarIngresoAutomatico(`Abono Cartera - ${deudorSeleccionado.cliente} (Deuda de ${fechaOriginal})`, valorAbono, fecha);
-
     setMontoAbono(''); 
     setDeudorSeleccionado(null); 
     setMetodoPagoAbono('Efectivo');
@@ -520,10 +534,8 @@ export default function App() {
     }
 
     try {
-      const isNomina = nuevoMovimientoFinanciero.tipo === 'gasto_nomina';
-      const esRetornoSocio = nuevoMovimientoFinanciero.tipo === 'retorno_socio';
-      const esInyeccion = nuevoMovimientoFinanciero.tipo === 'inyeccion_socio';
-
+      const isNomina = nuevoMovimientoFinanciero.tipo === 'Pago de Nómina';
+      
       let descFinal = nuevoMovimientoFinanciero.concepto;
       let catFinal = nuevoMovimientoFinanciero.categoria;
 
@@ -532,31 +544,27 @@ export default function App() {
         const emp = nuevoMovimientoFinanciero.empleadoNombre;
         const nombreTrabajador = emp === 'Ayudante Extra' ? nuevoMovimientoFinanciero.ayudanteNombre : emp;
         descFinal = `Nómina: Pago a ${nombreTrabajador} - (${nuevoMovimientoFinanciero.concepto})`;
-      } else if (esInyeccion) {
-        catFinal = 'Inyección de Socios';
-        descFinal = `Inyección de Capital: ${nuevoMovimientoFinanciero.concepto}`;
-      } else if (esRetornoSocio) {
-        catFinal = 'Retorno a Socios';
-        descFinal = `Retorno de Capital a Socio: ${nuevoMovimientoFinanciero.concepto}`;
+      } else if (nuevoMovimientoFinanciero.tipo === 'Otros Gastos') {
+        catFinal = 'Otros';
       }
 
       const payload = {
-        type: nuevoMovimientoFinanciero.tipo,
+        type: 'gasto_operativo', 
         date: fecha,
         amount: Number(nuevoMovimientoFinanciero.valor),
         description: descFinal,
         category: catFinal,
-        fuenteFinanciamiento: (esInyeccion || esRetornoSocio) ? 'Directo Socios' : nuevoMovimientoFinanciero.fuenteFinanciamiento,
+        fuenteFinanciamiento: nuevoMovimientoFinanciero.fuenteFinanciamiento,
         createdAt: new Date()
       };
 
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'), payload);
       
       setNuevoMovimientoFinanciero({
-        type: 'gasto_granja', concepto: '', valor: '', category: 'Insumos', fuenteFinanciamiento: 'Ventas de Finca', empleadoNombre: 'Samuel', ayudanteNombre: ''
+        tipo: 'Gasto de la Granja', concepto: '', valor: '', categoria: 'Insumos', fuenteFinanciamiento: 'Ventas Propias (Suma a Retorno)', empleadoNombre: 'Samuel', ayudanteNombre: ''
       });
 
-      showToast('💳 Transacción Financiera Guardada.');
+      showToast('💳 Transacción Guardada Exitosamente.');
     } catch (err) {
       console.error("Error guardando flujo financiero:", err);
       showToast('❌ Error al guardar transacción');
@@ -576,7 +584,6 @@ export default function App() {
     });
   };
 
-  // --- 4. CALCULOS UNIFICADOS DE CAPITAL ---
   const listaDeudores = useMemo(() => {
     let deudores = [];
     Object.keys(dbData).forEach(fechaKey => {
@@ -596,22 +603,17 @@ export default function App() {
     return deudores.sort((a, b) => new Date(b.fechaOriginal).getTime() - new Date(a.fechaOriginal).getTime());
   }, [dbData]);
 
+  // CÁLCULO DE BALANCE PUNTO CERO (BASES HISTÓRICAS FIJAS)
   const balancePuntoCero = useMemo(() => {
-    let totalInyectado = Number(saldosBase.inversionBase || 0);
-    let totalDevuelto = Number(saldosBase.retornoBase || 0);
+    let totalInyectado = INVERSION_BASE;
+    let totalDevuelto = RETORNO_BASE;
 
     transactions.forEach(t => {
-      if (t.type === 'inyeccion_socio') {
+      if (t.fuenteFinanciamiento === 'Inyección de Socio (Suma a Inyectado)') {
         totalInyectado += Number(t.amount || 0);
       }
-      if (t.type === 'retorno_socio') {
+      if (t.fuenteFinanciamiento === 'Ventas Propias (Suma a Retorno)') {
         totalDevuelto += Number(t.amount || 0);
-      }
-      
-      if (t.type !== 'ingreso' && t.type !== 'inyeccion_socio' && t.type !== 'retorno_socio') {
-        if (t.fuenteFinanciamiento === 'Inyección de Socio') {
-          totalInyectado += Number(t.amount || 0);
-        }
       }
     });
 
@@ -619,33 +621,33 @@ export default function App() {
     const porcentajeRetorno = totalInyectado > 0 ? (totalDevuelto / totalInyectado) * 100 : 0;
 
     return { totalInyectado, totalDevuelto, deudaPendiente, porcentajeRetorno };
-  }, [transactions, saldosBase]);
-
-  const kpisFinancieros = useMemo(() => {
-    let ingresosTotales = 0;
-    let gastosTotales = 0;
-
-    transactions.forEach(t => {
-      if (t.type === 'ingreso') {
-        ingresosTotales += Number(t.amount || 0);
-      } else if (t.type !== 'inyeccion_socio' && t.type !== 'retorno_socio') {
-        gastosTotales += Number(t.amount || 0);
-      }
-    });
-
-    return { ingresosTotales, gastosTotales, balanceOperacional: ingresosTotales - gastosTotales };
   }, [transactions]);
 
-  const gastosPorCategoria = useMemo(() => {
-    const map = {};
-    transactions.forEach(t => {
-      if (t.type !== 'ingreso' && t.type !== 'inyeccion_socio' && t.type !== 'retorno_socio') {
-        const cat = t.category || 'Otros';
-        map[cat] = (map[cat] || 0) + Number(t.amount || 0);
+  // VENTAS MENSUALES (TABLA)
+  const ventasMensuales = useMemo(() => {
+    const mesesMap = {};
+
+    Object.keys(dbData).forEach(date => {
+      const mes = date.substring(0, 7); // "YYYY-MM"
+      if (!mesesMap[mes]) {
+        mesesMap[mes] = { name: mes, cartonesFinca: 0, dineroFinca: 0, cartonesDist: 0, dineroDist: 0, totalDinero: 0 };
       }
+
+      const dia = dbData[date];
+      (dia.fincaVentas || []).forEach(v => {
+        mesesMap[mes].cartonesFinca += Number(v.cantidad || 0);
+        mesesMap[mes].dineroFinca += Number(v.total || 0);
+        mesesMap[mes].totalDinero += Number(v.total || 0);
+      });
+      (dia.ventas || []).forEach(v => {
+        mesesMap[mes].cartonesDist += Number(v.cantidad || 0);
+        mesesMap[mes].dineroDist += Number(v.total || 0);
+        mesesMap[mes].totalDinero += Number(v.total || 0);
+      });
     });
-    return Object.keys(map).map(k => ({ name: k, value: map[k] }));
-  }, [transactions]);
+
+    return Object.values(mesesMap).sort((a,b) => a.name.localeCompare(b.name));
+  }, [dbData]);
 
   const calculosHoy = useMemo(() => {
     const invTeoricoFinca = {};
@@ -705,7 +707,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL DE AYUDA AUTH (FIREBASE CONFIG INSTRUCTIONS) */}
+      {/* MODAL DE AYUDA AUTH */}
       {mostrarAyudaAuth && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-[130] p-4">
           <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl border border-red-100 animate-in zoom-in-95 duration-200 text-slate-800">
@@ -717,10 +719,10 @@ export default function App() {
               </div>
             </div>
             <p className="text-slate-600 text-xs font-semibold leading-relaxed mb-4">
-              La base de datos de <strong>Huevos Queens</strong> está online, pero tu servidor rechaza las conexiones anónimas. Sigue estos 3 pasos rápidos en tu cuenta para habilitarlo en 10 segundos:
+              La base de datos de <strong>Huevos Queens</strong> está online, pero tu servidor rechaza las conexiones anónimas. Sigue estos pasos rápidos en tu cuenta para habilitarlo en 10 segundos:
             </p>
             <div className="bg-slate-50 rounded-2xl p-4 text-xs font-bold space-y-2.5 text-slate-700 border mb-5">
-              <p>1️⃣ Abre tu <a href="https://console.firebase.google.com" target="_blank" rel="noreferrer" className="text-teal-600 underline">Consola de Firebase</a> y entra a tu proyecto <strong>"huevos-queens"</strong>.</p>
+              <p>1️⃣ Abre tu <a href="https://console.firebase.google.com" target="_blank" rel="noreferrer" className="text-teal-600 underline">Consola de Firebase</a> y entra a tu proyecto.</p>
               <p>2️⃣ En el menú de la izquierda ve a <strong>Authentication</strong> y pulsa en la pestaña <strong>Sign-in method</strong>.</p>
               <p>3️⃣ Busca el proveedor <strong>Anónimo (Anonymous)</strong>, haz clic en editar, selecciona <strong>Habilitar</strong> y presiona <strong>Guardar</strong>.</p>
             </div>
@@ -749,7 +751,6 @@ export default function App() {
         </div>
       )}
 
-      {/* CONTENEDOR PRINCIPAL */}
       <div className="max-w-7xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden min-h-[90vh] border border-slate-100 flex flex-col">
         
         {/* HEADER DE LA APLICACIÓN */}
@@ -796,7 +797,7 @@ export default function App() {
               { id: 'finca', label: 'Finca (Granja)', icon: <Leaf size={16} /> },
               { id: 'distribuidora', label: 'Distribuidora', icon: <Package size={16} /> },
               { id: 'finanzas', label: 'Gastos & Nómina', icon: <Receipt size={16} /> },
-              { id: 'historial', label: 'Historial', icon: <ClipboardList size={16} /> }
+              { id: 'historial', label: 'Historial Gastos', icon: <ClipboardList size={16} /> }
             ].map(tab => (
               <button
                 key={tab.id}
@@ -812,30 +813,17 @@ export default function App() {
               </button>
             ))}
           </div>
-
         </div>
 
         <div className="p-4 md:p-6 flex-1">
 
-          {/* VISTA 1: DASHBOARD DE INVERSION */}
+          {/* VISTA 1: DASHBOARD DE INVERSION Y VENTAS MENSUALES */}
           {vista === 'dashboard' && (
             <div className="space-y-6 animate-in fade-in duration-300">
               
-              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col md:flex-row justify-between items-center gap-4 shadow-sm">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-amber-100 rounded-xl text-amber-800"><AlertTriangle size={24} /></div>
-                  <div>
-                    <h3 className="font-extrabold text-amber-900">Estado de Sostenibilidad</h3>
-                    <p className="text-xs text-amber-700 font-medium">La granja produce ingresos, pero aún requiere inyecciones periódicas (50% de producción actual).</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-amber-800 bg-amber-100 px-3 py-1 rounded-full">Etapa de Crecimiento</span>
-                </div>
-              </div>
-
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                 
+                {/* TARJETA PRINCIPAL DE INVERSIÓN */}
                 <div className="lg:col-span-2 bg-gradient-to-br from-teal-900 to-emerald-800 text-white rounded-3xl p-6 shadow-xl relative overflow-hidden flex flex-col justify-between">
                   <div className="absolute right-0 bottom-0 translate-y-10 translate-x-10 opacity-10"><Award size={200} /></div>
                   
@@ -886,116 +874,92 @@ export default function App() {
                       Este es el monto exacto que te debe pagar la empresa para llegar a equilibrio de inversión.
                     </p>
                   </div>
-                  
-                  <div className="bg-slate-50 rounded-2xl p-4 mt-4 border border-slate-100 flex items-center gap-3">
-                    <TrendingUp className="text-teal-600" size={20} />
-                    <div>
-                      <span className="text-[10px] font-black text-slate-400 uppercase block">Balance Operativo Global</span>
-                      <span className={`text-base font-bold ${kpisFinancieros.balanceOperacional >= 0 ? 'text-teal-700' : 'text-red-500'}`}>
-                        {kpisFinancieros.balanceOperacional < 0 ? '-' : ''}${Math.abs(kpisFinancieros.balanceOperacional).toLocaleString()}
-                      </span>
-                    </div>
-                  </div>
                 </div>
 
               </div>
 
-              {/* CONFIGURACIÓN DE SALDOS BASE MANUALES HISTÓRICOS */}
-              <div className="bg-slate-50 border border-slate-200 rounded-3xl p-5 shadow-sm">
-                <div className="flex flex-col sm:flex-row justify-between items-center gap-4 mb-4">
-                  <div>
-                    <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-2">
-                      <Save className="text-teal-700 h-5 w-5" /> Configuración de Saldos Iniciales Históricos
-                    </h3>
-                    <p className="text-xs text-slate-500 font-medium">Establece tu inversión total y retornos acumulados anteriores aquí de forma manual. Toda nueva transacción sumará sobre estos valores.</p>
+              {/* NUEVO: PANEL SOCIO DIOS (DIEZMO) */}
+              <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-3xl p-5 shadow-sm flex flex-col md:flex-row justify-between items-center gap-4 mt-6">
+                <div className="flex items-center gap-4">
+                  <div className="p-3 bg-amber-100 rounded-2xl text-amber-600 shadow-inner">
+                    <Heart size={28} className="fill-amber-500 text-amber-500" />
                   </div>
-                  <button onClick={guardarSaldosInicialesManuales} className="bg-teal-800 hover:bg-teal-900 text-white px-5 py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center gap-2 shrink-0 shadow">
-                    Guardar Saldos Base
+                  <div>
+                    <h3 className="font-black text-amber-900 text-base">Aporte Socio Principal (Dios)</h3>
+                    <p className="text-xs text-amber-700 font-semibold mt-0.5">El acumulado actual de ventas totales (Finca + Dist) sin liquidar es de <span className="font-black">${acumuladoDiezmo.totalVentas.toLocaleString()}</span>.</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-4 w-full md:w-auto">
+                  <div className="text-center bg-white px-5 py-2.5 rounded-xl border border-amber-100 shadow-sm">
+                    <span className="text-[10px] font-black uppercase text-amber-500 block mb-0.5">10% Pendiente</span>
+                    <span className="text-xl font-black text-amber-600">${acumuladoDiezmo.diezmoTotal.toLocaleString()}</span>
+                  </div>
+                  <button 
+                    onClick={liquidarDiezmo} 
+                    disabled={acumuladoDiezmo.totalVentas === 0}
+                    className="bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 text-white px-5 py-4 rounded-xl font-black text-xs uppercase shadow-md transition-all whitespace-nowrap h-full"
+                  >
+                    Liquidar Aporte
                   </button>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="bg-white p-3 rounded-2xl border border-slate-200">
-                    <label className="text-[10px] font-black text-slate-400 block uppercase mb-1">Inversión Histórica Anterior ($)</label>
-                    <input 
-                      type="number" 
-                      placeholder="Ej: 14500000" 
-                      className="w-full p-2 border border-slate-200 rounded-xl font-bold text-sm outline-none text-slate-700" 
-                      value={inputInversion}
-                      onChange={e => setInputInversion(e.target.value)}
-                    />
-                  </div>
-                  <div className="bg-white p-3 rounded-2xl border border-slate-200">
-                    <label className="text-[10px] font-black text-slate-400 block uppercase mb-1">Retornos Históricos Anteriores ($)</label>
-                    <input 
-                      type="number" 
-                      placeholder="Ej: 5200000" 
-                      className="w-full p-2 border border-slate-200 rounded-xl font-bold text-sm outline-none text-slate-700" 
-                      value={inputRetorno}
-                      onChange={e => setInputRetorno(e.target.value)}
-                    />
-                  </div>
-                </div>
               </div>
 
-              {/* METRICAS Y DISTRIBUCION DE GASTOS */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                
-                <div className="bg-white rounded-3xl border border-slate-100 shadow-md p-5">
-                  <h3 className="font-bold text-slate-700 text-sm mb-4 flex items-center gap-2"><PieChartIcon size={16} className="text-teal-600"/> Distribución de Gastos por Categoría</h3>
-                  <div className="h-64 w-full">
-                    {gastosPorCategoria.length > 0 ? (
+              {/* NUEVO: TABLERO DE VENTAS MENSUALES (SIN RELACIONAR CON INVERSION) */}
+              <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm mt-6">
+                <div className="flex flex-col sm:flex-row justify-between items-center gap-4 mb-4 border-b pb-3">
+                  <div>
+                    <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-2">
+                      <BarChart2 className="text-blue-600 h-5 w-5" /> Consolidado de Ventas Mensuales (Volumen de Negocio)
+                    </h3>
+                    <p className="text-xs text-slate-500 font-medium">Este tablero mide exclusivamente el volumen de ventas en cartones y dinero. (No afecta la Cuenta de Inversión superior).</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* TABLA DE MESES */}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-left">
+                      <thead className="text-slate-500 uppercase bg-slate-50 border-y border-slate-200 font-bold">
+                        <tr>
+                          <th className="px-3 py-3">Mes</th>
+                          <th className="px-3 py-3 text-center">Cartones (Finca)</th>
+                          <th className="px-3 py-3 text-center">Cartones (Dist)</th>
+                          <th className="px-3 py-3 text-right">Total Ventas ($)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ventasMensuales.map((m, i) => (
+                          <tr key={i} className="border-b font-semibold text-slate-700 hover:bg-slate-50">
+                            <td className="px-3 py-3 font-black text-blue-800">{m.name}</td>
+                            <td className="px-3 py-3 text-center bg-teal-50/30">{m.cartonesFinca}</td>
+                            <td className="px-3 py-3 text-center bg-emerald-50/30">{m.cartonesDist}</td>
+                            <td className="px-3 py-3 text-right font-black text-slate-900">${m.totalDinero.toLocaleString()}</td>
+                          </tr>
+                        ))}
+                        {ventasMensuales.length === 0 && (
+                          <tr><td colSpan="4" className="text-center py-6 text-slate-400 italic">No hay ventas registradas aún.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* GRÁFICA DE VENTAS */}
+                  <div className="h-64 bg-slate-50 rounded-2xl p-4 border border-slate-100 flex items-center justify-center">
+                    {ventasMensuales.length > 0 ? (
                       <ResponsiveContainer width="100%" height="100%">
-                        <RePieChart>
-                          <Pie 
-                            data={gastosPorCategoria} 
-                            cx="50%" 
-                            cy="50%" 
-                            innerRadius={55} 
-                            outerRadius={80} 
-                            paddingAngle={4} 
-                            dataKey="value"
-                          >
-                            {gastosPorCategoria.map((entry, index) => (
-                              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                            ))}
-                          </Pie>
-                          <Tooltip formatter={(value) => "$" + value.toLocaleString()} />
-                          <Legend wrapperStyle={{ fontSize: '11px', fontWeight: 'bold' }} />
-                        </RePieChart>
+                        <BarChart data={ventasMensuales}>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                          <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748b' }} />
+                          <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748b' }} tickFormatter={v => `$${v/1000}k`} />
+                          <Tooltip formatter={(value) => "$" + value.toLocaleString()} cursor={{fill: '#f1f5f9'}} />
+                          <Bar dataKey="totalDinero" name="Total Ventas" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                        </BarChart>
                       </ResponsiveContainer>
                     ) : (
-                      <div className="h-full flex items-center justify-center text-slate-400 text-xs italic">
-                        Sin datos de gastos aún
-                      </div>
+                      <span className="text-xs text-slate-400 italic">La gráfica aparecerá al registrar ventas.</span>
                     )}
                   </div>
                 </div>
-
-                <div className="bg-white rounded-3xl border border-slate-100 shadow-md p-5 flex flex-col justify-between">
-                  <div>
-                    <h3 className="font-bold text-slate-700 text-sm mb-4">Métricas Financieras del Proyecto</h3>
-                    <div className="space-y-4 mt-6">
-                      <div className="flex justify-between items-center border-b pb-2">
-                        <span className="text-xs font-semibold text-slate-500">Total Ingresos Totales (Finca+Dist):</span>
-                        <span className="font-extrabold text-teal-700">${kpisFinancieros.ingresosTotales.toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between items-center border-b pb-2">
-                        <span className="text-xs font-semibold text-slate-500">Total Egresos (Insumos/Personal/Etc):</span>
-                        <span className="font-extrabold text-red-500">${kpisFinancieros.gastosTotales.toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between items-center border-b pb-2">
-                        <span className="text-xs font-semibold text-slate-500">Aportes Inyectados del Bolsillo del Socio:</span>
-                        <span className="font-extrabold text-slate-700">${balancePuntoCero.totalInyectado.toLocaleString()}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="bg-teal-50 p-4 rounded-2xl border border-teal-100 mt-4 text-center">
-                    <p className="text-xs text-teal-800 font-bold">🎯 Objetivo Actual</p>
-                    <p className="text-xs text-teal-600 font-medium mt-1">Incrementar la producción del 50% al 100% para lograr el punto de autogestión completa.</p>
-                  </div>
-                </div>
-
               </div>
 
             </div>
@@ -1005,9 +969,29 @@ export default function App() {
           {vista === 'finca' && (
             <div className="space-y-6 animate-in fade-in duration-300">
               
+              {/* PANEL DE ACUMULADO DE VENTAS SIN PAGAR */}
+              <div className="bg-blue-50 border border-blue-200 rounded-3xl p-5 shadow-sm flex flex-col md:flex-row justify-between items-center gap-4">
+                <div className="flex items-center gap-4">
+                  <div className="p-3 bg-blue-100 rounded-2xl text-blue-700">
+                    <CheckSquare size={24} />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-blue-900 text-sm">Ventas Acumuladas Pendientes (Día tras día)</h3>
+                    <p className="text-xs text-blue-700 font-semibold mt-0.5">Llevas <span className="font-black">{acumuladoFincaPendiente.totalCartones} cartones</span> fiaos/pendientes por un total de <span className="font-black text-base">${acumuladoFincaPendiente.totalDinero.toLocaleString()}</span>.</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={liquidarVentasFinca} 
+                  disabled={acumuladoFincaPendiente.totalCartones === 0}
+                  className="bg-blue-700 hover:bg-blue-800 disabled:bg-slate-300 text-white px-5 py-3 rounded-xl font-black text-xs uppercase shadow-md transition-all whitespace-nowrap"
+                >
+                  Liquidar y Poner en Cero
+                </button>
+              </div>
+
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                 
-                <div className="lg:col-span-5 bg-teal-50/50 rounded-3xl p-5 border border-teal-200/50 shadow-sm">
+                <div className="lg:col-span-5 bg-teal-50/50 rounded-3xl p-5 border border-teal-200/50 shadow-sm flex flex-col">
                   <div className="flex items-center gap-2 border-b border-teal-100 pb-3 mb-4">
                     <Sparkles className="text-teal-600" />
                     <div>
@@ -1016,7 +1000,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="space-y-2.5">
+                  <div className="space-y-2.5 flex-1">
                     {TIPOS_HUEVO.map(tipo => (
                       <div key={tipo} className="flex items-center justify-between bg-white p-2 rounded-2xl border border-slate-100 shadow-sm hover:border-teal-300 transition-colors">
                         <span className="font-extrabold text-slate-700 w-24 pl-2 text-sm">{tipo}</span>
@@ -1032,6 +1016,12 @@ export default function App() {
                         </div>
                       </div>
                     ))}
+                  </div>
+
+                  {/* SUMATORIA TOTAL DE PRODUCCIÓN */}
+                  <div className="mt-4 pt-3 border-t border-teal-200 flex justify-between items-center bg-teal-100 p-3 rounded-2xl">
+                    <span className="font-black text-teal-900 text-sm uppercase">Total Cartones Hoy:</span>
+                    <span className="font-black text-xl text-teal-700">{totalProduccionHoy}</span>
                   </div>
                 </div>
 
@@ -1137,7 +1127,7 @@ export default function App() {
                       onClick={agregarVentaFinca} 
                       className="w-full bg-teal-700 hover:bg-teal-800 text-white font-extrabold py-3.5 rounded-2xl shadow-lg flex items-center justify-center gap-2 text-sm transition-transform active:scale-95"
                     >
-                      <PlusCircle size={18} /> Registrar Venta en Finca
+                      <PlusCircle size={18} /> Registrar Venta y Sumar al Acumulado
                     </button>
                   </div>
 
@@ -1162,6 +1152,7 @@ export default function App() {
                         <th className="px-4 py-3 text-right">Precio Unitario</th>
                         <th className="px-4 py-3 text-right">Total</th>
                         <th className="px-4 py-3 text-center">Pago</th>
+                        <th className="px-4 py-3 text-center">Estado Acumulado</th>
                         <th className="px-4 py-3"></th>
                       </tr>
                     </thead>
@@ -1176,6 +1167,13 @@ export default function App() {
                           <td className="px-4 py-3 text-center">
                             <span className={`px-2 py-1 rounded-full text-[10px] font-black uppercase ${v.metodoPago === 'Nequi' ? 'bg-purple-100 text-purple-700' : 'bg-green-100 text-green-700'}`}>{v.metodoPago}</span>
                           </td>
+                          <td className="px-4 py-3 text-center">
+                            {v.liquidado ? (
+                              <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-2 py-1 rounded-full">Liquidado</span>
+                            ) : (
+                              <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-1 rounded-full">Pendiente</span>
+                            )}
+                          </td>
                           <td className="px-4 py-3 text-right">
                             <button onClick={() => borrarVentaFinca(v.id)} className="text-slate-300 hover:text-red-500 p-1"><Trash2 size={16} /></button>
                           </td>
@@ -1183,7 +1181,7 @@ export default function App() {
                       ))}
                       {(datosDia.fincaVentas || []).length === 0 && (
                         <tr>
-                          <td colSpan="7" className="text-center py-8 text-slate-400 italic font-semibold">No se han registrado ventas en finca hoy.</td>
+                          <td colSpan="8" className="text-center py-8 text-slate-400 italic font-semibold">No se han registrado ventas en finca hoy.</td>
                         </tr>
                       )}
                     </tbody>
@@ -1200,11 +1198,11 @@ export default function App() {
               
               <div className="lg:col-span-4 space-y-6">
                 
-                <div className="bg-teal-50/50 p-5 rounded-3xl border border-teal-200/50 shadow-sm">
+                <div className="bg-teal-50/50 p-5 rounded-3xl border border-teal-200/50 shadow-sm flex flex-col">
                   <h2 className="font-black text-teal-950 mb-3 flex items-center gap-2 border-b border-teal-200/60 pb-2 text-sm">
                     <Package className="h-5 w-5 text-teal-700" /> 1. Stock Inicial Distribuidora
                   </h2>
-                  <div className="space-y-2">
+                  <div className="space-y-2 flex-1">
                     {TIPOS_HUEVO.map(tipo => (
                       <div key={tipo} className="flex items-center justify-between bg-white p-2 rounded-2xl border border-slate-100 shadow-sm">
                         <span className="font-bold text-slate-700 w-16 pl-2 text-xs">{tipo}</span>
@@ -1220,6 +1218,11 @@ export default function App() {
                         </div>
                       </div>
                     ))}
+                  </div>
+                  {/* SUMATORIA TOTAL DE STOCK INICIAL */}
+                  <div className="mt-4 pt-3 border-t border-teal-200 flex justify-between items-center bg-teal-100 p-3 rounded-2xl">
+                    <span className="font-black text-teal-900 text-xs uppercase">Total Cartones Inicio:</span>
+                    <span className="font-black text-lg text-teal-700">{totalStockInicial}</span>
                   </div>
                   <p className="text-[10px] text-teal-600 mt-2 text-center font-bold italic">* Hereda automáticamente el excedente de ayer.</p>
                 </div>
@@ -1472,26 +1475,25 @@ export default function App() {
               
               <div className="lg:col-span-5 bg-white border border-slate-200 rounded-3xl p-5 shadow-md">
                 <h2 className="font-black text-slate-800 text-base mb-4 flex items-center gap-2 border-b pb-2">
-                  <Receipt className="text-teal-700" /> Registro de Movimientos Financieros
+                  <Receipt className="text-teal-700" /> Registro de Egresos y Nóminas
                 </h2>
 
                 <form onSubmit={guardarMovimientoFinanciero} className="space-y-4">
                   
                   <div>
-                    <label className="text-[10px] font-black text-slate-500 uppercase block mb-1">Tipo de Movimiento</label>
+                    <label className="text-[10px] font-black text-slate-500 uppercase block mb-1">Tipo de Gasto</label>
                     <select 
                       className="w-full p-2.5 bg-slate-50 border rounded-2xl text-xs font-bold text-slate-700" 
                       value={nuevoMovimientoFinanciero.tipo} 
                       onChange={e => setNuevoMovimientoFinanciero({...nuevoMovimientoFinanciero, tipo: e.target.value})}
                     >
-                      <option value="gasto_granja">Gasto de la Granja (Insumos/Servicios)</option>
-                      <option value="gasto_nomina">Pago de Nómina (Samuel/Merly/Extras)</option>
-                      <option value="inyeccion_socio">Inyección de Capital de Socio (Tu bolsillo ➡️ Deuda)</option>
-                      <option value="retorno_socio">Retorno de Capital a Socio (Negocio paga a Socio ➡️ Restar)</option>
+                      <option value="Gasto de la Granja">Gasto de la Granja (Insumos/Servicios)</option>
+                      <option value="Pago de Nómina">Pago de Nómina (Samuel/Merly/Extras)</option>
+                      <option value="Otros Gastos">Otros Gastos</option>
                     </select>
                   </div>
 
-                  {nuevoMovimientoFinanciero.tipo === 'gasto_nomina' && (
+                  {nuevoMovimientoFinanciero.tipo === 'Pago de Nómina' && (
                     <div className="bg-teal-50 p-3 rounded-2xl space-y-3 border border-teal-100">
                       <div>
                         <label className="text-[10px] font-black text-teal-800 uppercase block mb-1">Personal</label>
@@ -1541,7 +1543,7 @@ export default function App() {
                     />
                   </div>
 
-                  {nuevoMovimientoFinanciero.tipo === 'gasto_granja' && (
+                  {nuevoMovimientoFinanciero.tipo === 'Gasto de la Granja' && (
                     <div>
                       <label className="text-[10px] font-black text-slate-500 uppercase block mb-1">Categoría</label>
                       <select 
@@ -1553,24 +1555,24 @@ export default function App() {
                         <option value="Infraestructura">Infraestructura (Construcción, herramientas)</option>
                         <option value="Aves">Aves (Nuevas gallinas, repuestos)</option>
                         <option value="Sanidad">Sanidad (Vacunas, medicamentos)</option>
-                        <option value="Otros">Otros</option>
                       </select>
                     </div>
                   )}
 
-                  {nuevoMovimientoFinanciero.tipo !== 'inyeccion_socio' && nuevoMovimientoFinanciero.tipo !== 'retorno_socio' && (
-                    <div className="bg-amber-50 p-3 rounded-2xl border border-amber-200">
-                      <label className="text-[10px] font-black text-amber-950 uppercase block mb-1">Fuente de Financiamiento</label>
-                      <select 
-                        className="w-full p-2 bg-white border rounded-xl text-xs font-bold text-slate-700" 
-                        value={nuevoMovimientoFinanciero.fuenteFinanciamiento} 
-                        onChange={e => setNuevoMovimientoFinanciero({...nuevoMovimientoFinanciero, fuenteFinanciamiento: e.target.value})}
-                      >
-                        <option value="Ventas de Finca">Cubierto por las Ventas Propias (Flujo de Caja)</option>
-                        <option value="Inyección de Socio">Inyectado de otra fuente (Dinero que tú inyectas ➡️ Suma a Deuda)</option>
-                      </select>
-                    </div>
-                  )}
+                  <div className="bg-amber-50 p-3 rounded-2xl border border-amber-200 mt-2">
+                    <label className="text-[10px] font-black text-amber-950 uppercase block mb-1">Fuente de Financiamiento</label>
+                    <select 
+                      className="w-full p-2 bg-white border rounded-xl text-xs font-bold text-slate-700" 
+                      value={nuevoMovimientoFinanciero.fuenteFinanciamiento} 
+                      onChange={e => setNuevoMovimientoFinanciero({...nuevoMovimientoFinanciero, fuenteFinanciamiento: e.target.value})}
+                    >
+                      <option value="Ventas Propias (Suma a Retorno)">Cubierto por las Ventas Propias (Suma a Retorno)</option>
+                      <option value="Inyección de Socio (Suma a Inyectado)">Puesto de tu bolsillo (Suma a Inyección / Deuda)</option>
+                    </select>
+                    <p className="text-[9px] font-bold text-amber-700 mt-1 italic leading-tight">
+                      * Define si la granja se pagó a sí misma (retorno) o si el socio tuvo que meter la mano al bolsillo (deuda).
+                    </p>
+                  </div>
 
                   <button 
                     type="submit" 
@@ -1698,12 +1700,8 @@ export default function App() {
               
               <div className="bg-slate-100 p-4 rounded-3xl flex flex-col md:flex-row justify-between items-center gap-4">
                 <div>
-                  <h2 className="font-black text-slate-800">Contabilidad Financiera Histórica</h2>
-                  <p className="text-xs text-slate-500 font-semibold">Listado plano de ingresos, egresos, nóminas e inyecciones de socios sin semanas.</p>
-                </div>
-                <div className="text-center md:text-right bg-teal-800 text-white p-3 rounded-2xl shadow-md">
-                  <span className="text-[9px] font-black uppercase text-teal-200 tracking-wider">Flujo Consolidado en Sistema</span>
-                  <p className="text-xl font-black">${(transactions.reduce((acc, t) => t.type === 'ingreso' ? acc + Number(t.amount || 0) : acc - Number(t.amount || 0), 0)).toLocaleString()}</p>
+                  <h2 className="font-black text-slate-800">Contabilidad Financiera de Gastos</h2>
+                  <p className="text-xs text-slate-500 font-semibold">Listado histórico de egresos operativos y aportes, separados de las ventas.</p>
                 </div>
               </div>
 
@@ -1715,39 +1713,33 @@ export default function App() {
                         <th className="px-4 py-3">Fecha</th>
                         <th className="px-4 py-3">Concepto</th>
                         <th className="px-4 py-3">Categoría / Tipo</th>
-                        <th className="px-4 py-3">Financiamiento</th>
+                        <th className="px-4 py-3">Financiamiento (Quien pagó)</th>
                         <th className="px-4 py-3 text-right">Monto</th>
                         <th className="px-4 py-3"></th>
                       </tr>
                     </thead>
                     <tbody className="divide-y">
                       {transactions.map(t => {
-                        const esInyeccion = t.type === 'inyeccion_socio';
-                        const esRetorno = t.type === 'retorno_socio';
-
+                        const esInyeccion = t.fuenteFinanciamiento === 'Inyección de Socio (Suma a Inyectado)';
+                        
                         return (
                           <tr key={t.id} className="hover:bg-slate-50 font-semibold text-slate-700">
                             <td className="px-4 py-3 text-xs text-slate-500 font-bold">{t.date}</td>
                             <td className="px-4 py-3 font-bold text-slate-900">{t.description}</td>
                             <td className="px-4 py-3">
-                              <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black uppercase ${
-                                t.type === 'ingreso' ? 'bg-green-100 text-green-700' :
-                                t.type === 'gasto_nomina' ? 'bg-purple-100 text-purple-700' :
-                                esInyeccion ? 'bg-blue-100 text-blue-700' :
-                                esRetorno ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'
-                              }`}>
+                              <span className="px-2 py-0.5 rounded-lg text-[10px] font-black uppercase bg-slate-100 text-slate-600">
                                 {t.category || t.type}
                               </span>
                             </td>
                             <td className="px-4 py-3">
-                              <span className="text-[10px] bg-slate-100 px-2.5 py-1 rounded-full font-bold text-slate-500">
-                                {t.fuenteFinanciamiento || 'Socio / Directo'}
+                              <span className={`text-[10px] px-2.5 py-1 rounded-full font-bold ${
+                                esInyeccion ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'
+                              }`}>
+                                {esInyeccion ? 'Inyección Socio' : 'Ventas Propias'}
                               </span>
                             </td>
-                            <td className={`px-4 py-3 text-right font-black ${
-                              t.type === 'ingreso' || esInyeccion ? 'text-teal-600' : 'text-red-500'
-                            }`}>
-                              {(t.type === 'ingreso' || esInyeccion) ? '+' : '-'}${Number(t.amount || 0).toLocaleString()}
+                            <td className="px-4 py-3 text-right font-black text-slate-800">
+                              ${Number(t.amount || 0).toLocaleString()}
                             </td>
                             <td className="px-4 py-3 text-right">
                               <button onClick={() => borrarMovimientoFinanciero(t.id)} className="text-slate-300 hover:text-red-500"><Trash2 size={14} /></button>
@@ -1770,7 +1762,7 @@ export default function App() {
 
         <div className="bg-slate-100 p-4 border-t border-slate-200 text-center text-xs font-bold text-slate-400 mt-auto flex flex-col sm:flex-row justify-between items-center gap-2">
           <span>👑 Huevos Queens - Finca & Distribuidora</span>
-          <span>Desarrollado para unificación inteligente y toma de decisiones precisas • v3.0</span>
+          <span>Desarrollado para unificación inteligente y toma de decisiones precisas • v4.0</span>
         </div>
 
       </div>
